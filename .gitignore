@@ -1,0 +1,22 @@
+# Never commit personal backups or captures.
+*.bin
+*.rom0
+*.rom1
+*.rom2
+*.nvm
+*.mec
+*.pkt
+*.elf
+*.irx
+*.o
+*.avi
+*.mp4
+*.mkv
+__pycache__/
+.pytest_cache/
+.venv/
+captures/
+checkpoints/
+build/
+ps2/ps2v_sysman_irx.c
+*.ppm
