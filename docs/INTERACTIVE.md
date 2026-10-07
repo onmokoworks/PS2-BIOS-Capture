@@ -7,7 +7,7 @@ the selected object only when START is pressed. Build with
 |Port 1 controller|Action|
 |---|---|
 |SELECT|AUTO / MANUAL|
-|UP / DOWN|Manual display time, 0.1-second steps, 0.1–1.0 seconds|
+|UP / DOWN|Manual hold time, 6F steps, 6–60F (approximately 0.1–1.0 seconds)|
 |LEFT / RIGHT|Manual grid: 36×20, 48×26, 72×40|
 |L1 / R1 while paused|TEST 64K / ROM0 64K / ROM0 4M|
 |START or CROSS|Start / pause|
@@ -25,6 +25,14 @@ the snapshot; changing the source reacquires it on the next START.
 |0|8×8|36×20|132|1,320|
 |1|6×6|48×26|264|2,640|
 |2|4×4|72×40|672|6,720|
+
+The settings screen shows `HOLD: 6F / 0.1S`, with the VBlank count first and
+an approximate duration alongside it. Here **1F means one VBlank**, about
+1/59.94 second in NTSC. In 480i this is one field, not a complete two-field
+frame. The sender overlay shows `MAN 6F GRID0`. AUTO uses 6F, 12F and 18F;
+manual controls retain the existing 6F steps. This changes the labels only,
+not the transfer timing or protocol. Already burned discs keep their old
+labels; these labels require a newly built ELF.
 
 Six NTSC VBlanks correspond to about 0.1 seconds; drawing may add overhead.
 Dense cells may cause more analogue decoding errors. The 480i adapter doubles

@@ -39,9 +39,9 @@ void pv_menu(const pv_settings *s, int connected, pv_rect_fn rect, void *ctx)
     text(rect,ctx,16,12,2,"PS2 VIDEO BACKUP");
     text(rect,ctx,16,48,2,s->automatic ? "MODE: AUTO" : "MODE: MANUAL");
     sprintf(line,"GRID: %uX%u",g->cols,g->rows); text(rect,ctx,16,72,2,line);
-    sprintf(line,"TIME: %u.%uS",tenths/10,tenths%10); text(rect,ctx,16,96,2,line);
+    sprintf(line,"HOLD: %uF / %u.%uS",pv_settings_vblanks(s),tenths/10,tenths%10); text(rect,ctx,16,96,2,line);
     sprintf(line,"SRC: %s",sources[s->source_kind]); text(rect,ctx,16,120,2,line);
-    text(rect,ctx,16,158,1,"SELECT AUTO/MAN  UP/DOWN TIME");
+    text(rect,ctx,16,158,1,"SELECT AUTO/MAN  UP/DOWN HOLD");
     text(rect,ctx,16,170,1,"LEFT/RIGHT GRID  L1/R1 SOURCE");
     text(rect,ctx,16,194,2,connected ? "START SEND" : "CONNECT PAD1");
     text(rect,ctx,16,215,1,"ROM0 READ ONLY ON START");
@@ -49,8 +49,7 @@ void pv_menu(const pv_settings *s, int connected, pv_rect_fn rect, void *ctx)
 void pv_overlay(const pv_settings *s, pv_rect_fn rect, void *ctx)
 {
     char line[64];
-    unsigned tenths = pv_settings_tenths(s);
-    sprintf(line,"%s %u.%uS GRID%u",s->automatic ? "AUTO" : "MAN",tenths/10,tenths%10,s->profile);
+    sprintf(line,"%s %uF GRID%u",s->automatic ? "AUTO" : "MAN",pv_settings_vblanks(s),s->profile);
     text(rect,ctx,16,2,1,line);
     text(rect,ctx,16,216,1,"START PAUSE  SELECT MODE");
 }
