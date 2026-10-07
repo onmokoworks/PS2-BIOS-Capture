@@ -1,97 +1,75 @@
-# PS2 Video Backup (PS2V)
+# PS2 BIOS Capture
 
-PS2のアナログ映像から、UVCキャプチャ経由でbinaryを復元するオープンソース実験。**BIOSは同梱していません。既定ELFはBIOSを読まず、固定疑似乱数64 KiBを送信します。**
+PS2の映像出力からデータを送り、PCのキャプチャボードで受信・復元する実験プロジェクトです。所有するPS2のBIOSをバックアップするために作っています。BIOS本体は同梱・配布しません。
 
-COLOR4 RAW、frame/source CRC32、周回再送、受信済みpacketの保存・再開を実装。Python referenceとPS2用portable Cはbyte/pixel単位の一致をテストします。通常のPS2SDK ELFで、FreeDVDBootへの組込みは行っていません。
+PS2側はデータを4色のセルで表示し、PC側は各フレームとデータ全体のCRC32を確認します。送信は周回するので、欠落したフレームを次の周回から補完できます。転送にUSBストレージやネットワークは使いません。
 
-実装とビルドは完了していますが、実PS2でのBIOSバックアップ成功は未検証です。状態は[検証記録](docs/VALIDATION.md)を参照してください。
+## 現在の状態
 
-## 最初に読むもの
-- [設計・PS2SDK API・BIOSDrain読出し調査](ARCHITECTURE.md)
-- [wire形式と画面配置](PROTOCOL.md)
-- [参考実装とライセンス](docs/REFERENCES.md)
-- [実機/PCSX2検証手順](docs/HARDWARE.md)
+実PS2で固定テストデータ64 KiBの転送に成功し、元データとの完全一致を確認しました。BIOSの読み出し、新しい操作メニュー、高密度グリッドは実機未検証です。ホスト側では全4 MiBの復元を含む50件のテストが通っています。
 
-## Hostのセットアップ
-Python 3.11以降。プロジェクトのルートで実行します。
+## PC側の準備
+
+Python 3.11以降を使います。リポジトリのルートで実行します。
 
 ```sh
 python -m venv .venv
-# Windows PowerShell: .venv/Scripts/Activate.ps1
-# Linux/macOS: source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m pytest -q
 ```
 
-C/Python一致テストにはhost GCC/Clangが必要です。`CC`環境変数でコンパイラの実行ファイルを指定できます。未指定でコンパイラが見つからない場合だけC試験をskipします。Windowsではコンパイラの依存DLLがあるbinディレクトリもPATHに追加してください。
-
-4 MiB画像往復試験は約34秒かかりました（環境依存）。短い試験だけなら `python -m pytest -q -m "not slow"`。
-
-## BIOSなしのCLI再現
-以下の入力・出力ファイル名とディレクトリは未使用のものを指定します。
-
-```sh
-python -m tools.test_pattern test-data.bin
-python -m tools.reference_encoder test-data.bin frames --session 0x12345678
-python -m receiver --images frames --state checkpoints/test --output restored.bin
-python -c "from pathlib import Path; assert Path('test-data.bin').read_bytes()==Path('restored.bin').read_bytes(); print('identical')"
-```
-
-`tools.test_pattern`はPS2既定モードと同じxorshift32（seed=0x50533256、各更新後の下位8bit）の64 KiBを生成。任意binaryをreference encoderのinputに指定することもできます。
-
-## 録画・UVC
-
-専用のネイティブ画面でも直接キャプチャできます。
+Windows PowerShellでは `.venv/Scripts/Activate.ps1`、Linux/macOSでは `source .venv/bin/activate` で環境を有効にします。
 
 ```sh
 python -m pip install -r requirements-gui.txt
 python -m receiver.gui
 ```
 
-Windowsでは`Launch-Capture.cmd`をダブルクリックしても起動できます。
-機器一覧からキャプボを選んで「受信開始」を押すと、プレビュー・受信数・欠落数・CRCエラーを表示します。正常なpacketを随時checkpointへ保存し、全体CRCが一致すると完成binaryを保存してキャプチャを停止します。現在の固定64 KiBテストパターンでは、既知データとの全byte一致も確認します。
+Windowsではセットアップ後に `Launch-Capture.cmd` からも起動できます。キャプチャボードを選んで「受信開始」を押すと、プレビュー、受信バイト数、欠落位置、CRCエラーを表示します。全体CRCが一致すると復元したファイルを保存します。保存先の既定値は `captures/` です。
 
-同じ保存先を使えば同一sessionを再開できます。既存の完成ファイルは同じ内容なら再利用し、異なる内容なら上書きしません。保存先の既定値は`captures/`です。OBSなどが同じ機器を使用中の場合は、そちらのキャプチャを停止してから受信してください。
+OBSなどで同じキャプチャボードを使用している場合は、そちらのキャプチャを停止してから受信します。受信データと録画は個人のバックアップとして管理してください。
 
-「受信バイト」欄は、CRC合格済みのユニークなペイロードのバイト数・未受信バイト数・直近に受信したオブジェクト内範囲・先頭の欠落位置・直近フレーム先頭32 bytesの16進表示を示します。同じフレームの再受信はバイト数に加算しません。範囲はROM内などの相対オフセットで、PS2の物理メモリアドレスではありません。checkpointから再開した場合も保存済みのバイト数を引き継ぎます。
+## PS2側の操作
 
-```sh
-python -m receiver --video capture.avi --state checkpoints/session-a --output recovered.bin
-python -m receiver --camera 0 --backend dshow --state checkpoints/session-b --output recovered.bin
-```
-
-Windowsは`auto`/`dshow`/`msmf`、Linuxは`auto`/`v4l2`。カメラ番号はOpenCVのdevice indexです。640×480程度で240pを受けられるキャプチャを設定してください。現段階ではカメラの解像度・fps交渉はOpenCV/ドライバの既定設定に依存します。
-
-同一送信sessionを再開するには同じ`--state`を指定。Ctrl+Cや動画終了までに受信した正常packetは残ります。完成前は終了コード2、完成は0、IO/整合性エラーは1、Ctrl+Cは130です。完成済みstateなら映像を開かず再出力できます（新しいoutput名を指定）。
-
-stateは1 session専用。別のobject/起動sessionには新しいstateディレクトリを使ってください。初回のCRC合格frameからmetadataを固定し、異なるsessionを自動的に上書きしません。破損したcheckpointは起動時にエラーとして止まります。完成binaryは全体CRCが一致してから書き込み、既存outputを上書きしません。state内のpacketや録画にも元データが含まれるため、個人のバックアップとして管理してください。
-
-## PS2SDKビルド
-[公式PS2DEV](https://github.com/ps2dev/ps2dev)のEE/IOP toolchain、PS2SDK、GNU make、POSIX shell、bin2cを使用します。PS2DEV/PS2SDK/PATHは公式手順で設定します。
+[PS2DEV・PS2SDK](https://github.com/ps2dev/ps2dev)の環境で、操作メニュー付きのELFをビルドします。
 
 ```sh
-make -C ps2 SOURCE_KIND=0  # Phase 2: 固定64 KiB (既定)
-make -C ps2 SOURCE_KIND=1  # Phase 3: ROM0先頭64 KiB
-make -C ps2 SOURCE_KIND=2  # Phase 4: ROM0全4 MiB
-make -C ps2 SOURCE_KIND=0 VIDEO_INTERLACED=1 HOLD_VBLANKS=12  # HDMI変換器向け480i互換版
+make -C ps2 SOURCE_KIND=0 INTERACTIVE=1 VIDEO_INTERLACED=1
 ```
 
-出力は`ps2/ps2-video-backup.elf`。モード変更時はmain.oを必ず再コンパイルします。別名で保存したい場合は`EE_BIN=ps2v-test.elf`などを指定できます。`HOLD_VBLANKS=6`が既定、最小2。MVPでは6以上から開始してください。IOP IRXはELFへ埋め込まれるので別ファイルのロードやUSBストレージは不要です。
+出力は `ps2/ps2-video-backup.elf` です。DVDプレーヤー3.02J用の起動ディスクは[YADEのパッケージング手順](packaging/yade/README.md)を参照してください。
 
-通常のPS2メニューは映るのにテスト版で「Video Format Not Supported」が出る場合、HDMI変換器などが240pを受け付けない可能性があります。`VIDEO_INTERLACED=1`でNTSCの480iタイミングに変更し、論理320×224の画面を640×448へ2倍描画します。各走査線を2本ずつ同じ内容にするため、両フィールドに全セルが残ります。PS2Vの形式は同じです。変換器・キャプボでの実際の受付は別途確認してください。
+起動時は固定テストデータを選んだ設定画面で止まります。まず `TEST 64K` のまま、MANUAL・0.3秒・36×20で受信を確認します。コントローラーはポート1に接続します。
 
-DVDプレーヤー3.02J用のYADE起動ディスクは[独立したパッケージング手順](packaging/yade/README.md)を参照してください。
+| ボタン | 操作 |
+|---|---|
+| SELECT | AUTO / MANUAL |
+| 上下 | MANUALの表示時間を0.1秒刻みで変更 |
+| 左右 | MANUALの密度を36×20・48×26・72×40から選択 |
+| L1 / R1 | 停止中にTEST 64K・ROM0 64K・ROM0 4Mを選択 |
+| START / × | 送信開始・一時停止 |
 
-この成果物の`ps2/build/`には3モードのビルド済みELFとSHA256 manifestがあります。これらは未実機検証版です。まずtest ELFで撮影し、`tools.test_pattern`の出力と完全一致してからROM0の試験に進みます。ソースZIPには生成ELF・SDK・個人データを含めません。
+AUTOは標準密度で、周回ごとに表示時間を0.1・0.2・0.3秒へ切り替えます。PCからの応答はないため、受信品質に応じた自動調整ではありません。密度を変えると別の受信セッションになります。詳しくは[操作説明](docs/INTERACTIVE.md)を参照してください。
 
-PS2からUSBストレージ/ネットワークへ書き出す処理はありません。ELFを起動する環境自体（メモリーカード等）は別途必要です。FreeDVDBoot packagingは最後の独立工程として保留しています。
+## PS2なしで試す
 
-YADE用の[操作メニュー版](docs/INTERACTIVE.md)も追加しました。`INTERACTIVE=1 VIDEO_INTERLACED=1`でビルドし、PS2のコントローラーから表示時間と密度を変更できます。AUTOは0.1/0.2/0.3秒で周回、MANUALは0.1秒刻みと3種類の密度です。同じメニューから固定データ・ROM0先頭64 KiB・ROM0全4 MiBを選べます。初期選択は固定データで、STARTを押すまで読み出しません。メニュー版の実機検証はこれからです。
+未使用のファイル名と出力先を指定します。
 
-## 限界
-COLOR8、圧縮、FEC、フィールド分離/高度なdeinterlace、極端なperspective、四隅を失ったcropには対応していません。各セルは8×8 pixels。毎フレーム校正しますが、compositeでの実測信頼性はまだ未確認です。RGBが潰れたり、切替途中の画面を取り込んだときはframe CRCで拒否し、次の保持画面/周回を待ちます。
+```sh
+python -m tools.test_pattern test-data.bin
+python -m tools.reference_encoder test-data.bin frames --session 0x12345678
+python -m receiver --images frames --state checkpoints/test --output restored.bin
+python -c "from pathlib import Path; assert Path('test-data.bin').read_bytes()==Path('restored.bin').read_bytes(); print('identical')"
+python -m pytest -q
+```
 
-4 MiBは31,776 packetsで理論約53分/周（6 VBlank保持）。実際は描画・復号・dropで長くなります。ROM1/ROM2/NVM/MECはobject typeを予約した段階です。実ROM0が安定するまで拡張しません。
+CとPythonの一致テストにはGCCまたはClangが必要です。コンパイラが見つからない場合、そのテストはスキップします。録画とライブ入力はCLIでも受信できます。
 
-## ライセンス
-新規コードは[MIT](LICENSE)。BIOSDrainから変更した読出し層は元著作権表示と[MIT全文](ps2/LICENSES/BIOSDrain-MIT.txt)を保持。PS2SDKをリンクしたELFにはSDKのAFL-2.0等の条件も適用されます。参照・依存の詳細は[REFERENCES](docs/REFERENCES.md)。
+```sh
+python -m receiver --video capture.avi --state checkpoints/video --output recovered.bin
+python -m receiver --camera 0 --backend dshow --state checkpoints/live --output recovered.bin
+```
+
+## 詳細・ライセンス
+
+[設計](ARCHITECTURE.md)、[プロトコル](PROTOCOL.md)、[実機検証手順](docs/HARDWARE.md)、[検証記録](docs/LIVE-VALIDATION-2026-10-07.md)を参照してください。圧縮、FEC、COLOR8には未対応です。
+
+新規コードは[MIT](LICENSE)です。BIOSDrain由来の読み出し層は元の著作権表示と[MITライセンス](ps2/LICENSES/BIOSDrain-MIT.txt)を保持しています。PS2SDKなどの条件と参考実装は[参考資料](docs/REFERENCES.md)に記載しています。
