@@ -11,7 +11,7 @@ import cv2
 from PIL import Image, ImageTk
 from .capture import png_frames, video_frames
 from .codec import decode_image
-from .live import Transfer
+from .live import Transfer, fresh_directory
 from .protocol import GRIDS, DecodeError
 
 
@@ -29,9 +29,13 @@ class App:
         self.events = queue.Queue()
         self.preview = None
         self.worker = None
+        self.capture_active = False
         self.stop = threading.Event()
         self.output_file = None
         self.image_ref = None
+        self.fresh = tk.BooleanVar(value=args.fresh)
+        self.preview_status = tk.StringVar(value='プレビュー未開始')
+        self.reception_origin = tk.StringVar(value='保存済みから再開した分と今回の新規受信を分けて表示します。')
         root.title('PS2 Video Backup — キャプチャ受信')
         root.geometry('1000x780')
         root.minsize(820, 650)
@@ -56,7 +60,13 @@ class App:
         self.start_button.pack(side='left')
         self.stop_button = ttk.Button(top, text='停止', state='disabled', command=self.stop_receive)
         self.stop_button.pack(side='left', padx=(8, 0))
+        self.fresh_toggle = ttk.Checkbutton(outer, text='ゼロから受信する（毎回別フォルダーに保存・以前のデータは残す）',
+                                            variable=self.fresh)
+        self.fresh_toggle.pack(anchor='w', pady=(8, 0))
+        ttk.Label(outer, text='オフなら同じ送信sessionの保存済みデータを読み込み、欠落分から再開します。',
+                  wraplength=940).pack(anchor='w')
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor='w', pady=(12, 8))
+        ttk.Label(outer, textvariable=self.preview_status).pack(anchor='w')
         self.canvas = tk.Canvas(outer, bg='#111111', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
         self.canvas.create_text(430, 200, text='PS2映像プレビュー', fill='#aaaaaa', font=('Yu Gothic UI', 18))
@@ -66,6 +76,7 @@ class App:
         byte_panel = ttk.LabelFrame(outer, text='受信バイト', padding=8)
         byte_panel.pack(fill='x', pady=(8, 0))
         ttk.Label(byte_panel, textvariable=self.byte_counts).pack(anchor='w')
+        ttk.Label(byte_panel, textvariable=self.reception_origin).pack(anchor='w')
         ttk.Label(byte_panel, textvariable=self.byte_range, wraplength=920).pack(anchor='w', pady=(3, 4))
         ttk.Label(byte_panel, textvariable=self.hex_preview, font=('Consolas', 10)).pack(anchor='w')
         ttk.Label(outer, textvariable=self.details, wraplength=940).pack(anchor='w', pady=(6, 8))
@@ -114,16 +125,29 @@ class App:
             messagebox.showerror('保存先', '保存先を指定してください。')
             return
         source = self.device_list[self.device.current()][0] if self.device.current() >= 0 else 0
+        try:
+            if self.fresh.get():
+                directory = str(fresh_directory(directory))
+        except OSError as error:
+            messagebox.showerror('保存先', f'新しい受信フォルダーを作成できません: {error}')
+            return
         self.stop.clear()
+        self.capture_active = True
         self.preview = None
+        self.image_ref = None
+        self.canvas.delete('all')
+        self.canvas.create_text(300, 120, text='新しい映像を待っています', fill='#aaaaaa')
+        self.preview_status.set('接続中 — まだ新しい映像は取得していません')
         self.output_file = None
         self.bar['value'] = 0
         self.counts.set('受信 0 / —　　欠落 —　　CRCエラー 0')
         self.byte_counts.set('受信済み 0 bytes')
+        self.reception_origin.set('保存済みから再開 0 bytes / 今回の新規受信 0 bytes')
+        self.details.set(f'今回の保存先: {directory}')
         self.byte_range.set('直近の受信範囲 —　　先頭の欠落位置 —')
         self.hex_preview.set('CRC合格フレームの先頭32 bytesをここに表示します。')
         self.status.set('キャプチャ機器を開いています…')
-        for control in (self.start_button, self.refresh_button, self.browse_button, self.destination):
+        for control in (self.start_button, self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
             control['state'] = 'disabled'
         self.device['state'] = 'disabled'
         self.stop_button['state'] = 'normal'
@@ -190,6 +214,8 @@ class App:
         percent = progress.received_bytes*100/progress.source_size if progress.source_size else 0
         self.byte_counts.set(f'受信済み {progress.received_bytes:,} / {progress.source_size:,} bytes'
                              f'（{percent:.1f}%）　未受信 {progress.source_size-progress.received_bytes:,} bytes')
+        self.reception_origin.set(f'保存済みから再開 {progress.restored_bytes:,} bytes（{progress.restored_frames}フレーム）'
+                                  f' / 今回の新規受信 {progress.new_bytes:,} bytes（{progress.new_frames}フレーム）')
         if progress.last_offset is None:
             return
         start, length = progress.last_offset, progress.last_length
@@ -234,7 +260,10 @@ class App:
                 self.counts.set(f'受信 {value.total} / {value.total}　　欠落 0　　全体CRC一致')
                 self.output_file = value.output
                 suffix = ' 固定テストデータとも完全一致しました。' if value.test_matches else ''
-                self.status.set('受信完了。全体CRCを確認して保存しました。' + suffix)
+                origin = ('保存済みデータだけで完成を確認しました。' if value.new_frames == 0
+                          else '保存済みデータと今回の受信で完成しました。' if value.restored_frames
+                          else '今回の受信だけで完成しました。')
+                self.status.set(origin + ' 全体CRC一致。' + suffix)
                 self.details.set(value.output)
                 if self.args.report:
                     import json
@@ -246,7 +275,9 @@ class App:
                     import json
                     Path(self.args.report).write_text(json.dumps({'complete': False, 'error': value}), encoding='utf-8')
             elif kind == 'done':
-                for control in (self.start_button, self.refresh_button, self.browse_button, self.destination):
+                self.capture_active = False
+                self.preview_status.set('プレビュー停止 — 表示中の画像は最後に取得した映像です')
+                for control in (self.start_button, self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
                     control['state'] = 'normal'
                 self.device['state'] = 'readonly'
                 self.stop_button['state'] = 'disabled'
@@ -258,6 +289,8 @@ class App:
             self.canvas.delete('all')
             self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2,
                                      image=self.image_ref, anchor='center')
+            if self.capture_active and not self.stop.is_set():
+                self.preview_status.set('映像取得中')
         if self.args.auto_exit and self.worker is not None and not self.worker.is_alive() and self.events.empty():
             self.root.destroy()
             return
@@ -275,6 +308,7 @@ def main():
     source.add_argument('--images', help='optional reference PNG directory')
     source.add_argument('--camera', type=int, help='start receiving from this device index')
     parser.add_argument('--output-dir', default=str(Path(__file__).resolve().parents[1] / 'captures'))
+    parser.add_argument('--fresh', action='store_true', help='receive from zero into a new folder, preserving earlier backups')
     parser.add_argument('--auto-exit', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--report', help=argparse.SUPPRESS)
     args = parser.parse_args()

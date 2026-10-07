@@ -1,6 +1,8 @@
 """Capture-independent session handling used by the desktop tool."""
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
+import tempfile
 from .protocol import DecodeError, crc32
 from .store import Store
 
@@ -24,6 +26,17 @@ class Progress:
     first_missing_offset: int | None = None
     profile: int = 0
     version: int = 1
+    restored_bytes: int = 0
+    new_bytes: int = 0
+    restored_frames: int = 0
+    new_frames: int = 0
+
+
+def fresh_directory(directory):
+    """Keep old backups intact and isolate every fresh reception attempt."""
+    root = Path(directory) / 'fresh'
+    root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=datetime.now().strftime('%Y%m%d-%H%M%S-'), dir=root))
 
 
 class Transfer:
@@ -33,6 +46,8 @@ class Transfer:
         self.output = None
         self.test_matches = None
         self.received_bytes = 0
+        self.restored_bytes = 0
+        self.restored_frames = 0
         self.last_frame = None
         self.last_was_new = False
         self.first_missing = 0
@@ -44,6 +59,8 @@ class Transfer:
                 key = f'v{frame.version}-g{frame.profile}-' + key
             self.store = Store(self.directory / 'checkpoints' / key)
             self.received_bytes = sum(len(f.payload) for f in self.store.frames.values())
+            self.restored_bytes = self.received_bytes
+            self.restored_frames = len(self.store.frames)
         self.last_was_new = self.store.add(frame)
         self.last_frame = frame
         if self.last_was_new:
@@ -79,4 +96,6 @@ class Transfer:
                         last.offset if last else None, len(last.payload) if last else 0,
                         last.payload[:32].hex(' ').upper() if last else '', self.last_was_new,
                         self.first_missing*last.capacity if self.first_missing < meta[5] else None,
-                        last.profile, last.version)
+                        last.profile, last.version, self.restored_bytes,
+                        self.received_bytes-self.restored_bytes, self.restored_frames,
+                        len(self.store.frames)-self.restored_frames)

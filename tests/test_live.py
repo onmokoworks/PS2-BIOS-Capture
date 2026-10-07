@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytest
-from receiver.live import Transfer
+from receiver.live import Transfer, fresh_directory
 from receiver.protocol import encode, decode, DecodeError
 from tools.test_pattern import pattern
 
@@ -48,3 +48,33 @@ def test_byte_progress_out_of_order_duplicate_and_resume(tmp_path):
     assert final.received_bytes == len(data)
     assert final.first_missing_offset is None and final.complete
     assert final.last_offset == 0
+    assert final.restored_bytes == 72 and final.new_bytes == 132
+    assert final.restored_frames == 1 and final.new_frames == 1
+
+
+def test_completed_resume_is_not_new_reception(tmp_path):
+    frame = decode(next(encode(b'previous reception')))
+    original = Transfer(tmp_path).accept(frame)
+    resumed = Transfer(tmp_path).accept(frame)
+    assert resumed.complete and resumed.output == original.output
+    assert resumed.restored_bytes == len(frame.payload)
+    assert resumed.new_bytes == resumed.new_frames == 0
+    assert resumed.restored_frames == 1
+
+
+def test_fresh_reception_keeps_previous_data(tmp_path):
+    data = bytes(range(200))
+    frames = list(map(decode, encode(data)))
+    previous = Transfer(tmp_path)
+    for frame in frames:
+        old = previous.accept(frame)
+    first_directory = fresh_directory(tmp_path)
+    other_directory = fresh_directory(tmp_path)
+    assert first_directory != other_directory
+    fresh = Transfer(first_directory)
+    partial = fresh.accept(frames[0])
+    assert not partial.complete and partial.restored_bytes == 0
+    assert partial.new_bytes == len(frames[0].payload)
+    completed = fresh.accept(frames[1])
+    assert completed.complete and completed.new_bytes == len(data)
+    assert Path(old.output).read_bytes() == Path(completed.output).read_bytes() == data
