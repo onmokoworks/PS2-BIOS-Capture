@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 import tempfile
+import time
 from .protocol import DecodeError, crc32
 from .store import Store
 
@@ -30,6 +31,10 @@ class Progress:
     new_bytes: int = 0
     restored_frames: int = 0
     new_frames: int = 0
+    elapsed_seconds: float = 0.0
+    new_bytes_per_second: float = 0.0
+    coverage: tuple[int, ...] = ()
+    current_block: int | None = None
 
 
 def fresh_directory(directory):
@@ -40,7 +45,10 @@ def fresh_directory(directory):
 
 
 class Transfer:
-    def __init__(self, directory):
+    def __init__(self, directory, *, clock=time.monotonic):
+        self.clock = clock
+        self.started_at = clock()
+        self.completed_at = None
         self.directory = Path(directory)
         self.store = None
         self.output = None
@@ -51,6 +59,15 @@ class Transfer:
         self.last_frame = None
         self.last_was_new = False
         self.first_missing = 0
+        self.block_size = 1
+        self.block_bytes = []
+
+    def track_coverage(self, frame):
+        if not frame.payload:
+            return
+        end = frame.offset+len(frame.payload)
+        for index in range(frame.offset//self.block_size, (end-1)//self.block_size+1):
+            self.block_bytes[index] += min(end, (index+1)*self.block_size)-max(frame.offset, index*self.block_size)
 
     def accept(self, frame):
         if self.store is None:
@@ -61,10 +78,15 @@ class Transfer:
             self.received_bytes = sum(len(f.payload) for f in self.store.frames.values())
             self.restored_bytes = self.received_bytes
             self.restored_frames = len(self.store.frames)
+            self.block_size = max(1, (frame.size+127)//128)
+            self.block_bytes = [0]*((frame.size+self.block_size-1)//self.block_size)
+            for saved in self.store.frames.values():
+                self.track_coverage(saved)
         self.last_was_new = self.store.add(frame)
         self.last_frame = frame
         if self.last_was_new:
             self.received_bytes += len(frame.payload)
+            self.track_coverage(frame)
         while self.first_missing in self.store.frames:
             self.first_missing += 1
         if self.store.complete and self.output is None:
@@ -83,13 +105,20 @@ class Transfer:
                 if not self.test_matches:
                     raise DecodeError('fixed test pattern mismatch')
             self.output = path
+            self.completed_at = self.clock()
         return self.progress()
 
     def progress(self):
+        end = self.completed_at if self.completed_at is not None else self.clock()
+        elapsed = max(0.0, end-self.started_at)
         if self.store is None or self.store.identity is None:
-            return Progress(0, 0, 0, 0, 0, False)
+            return Progress(0, 0, 0, 0, 0, False, elapsed_seconds=elapsed)
         meta = self.store.identity
         last = self.last_frame
+        new_bytes = self.received_bytes-self.restored_bytes
+        coverage = tuple(0 if count == 0 else
+                         2 if count == min(self.block_size, last.size-index*self.block_size) else 1
+                         for index, count in enumerate(self.block_bytes))
         return Progress(len(self.store.frames), meta[5], meta[6], meta[8], meta[1],
                         self.output is not None, str(self.output or ''), self.test_matches,
                         self.received_bytes, last.index if last else None,
@@ -98,4 +127,6 @@ class Transfer:
                         self.first_missing*last.capacity if self.first_missing < meta[5] else None,
                         last.profile, last.version, self.restored_bytes,
                         self.received_bytes-self.restored_bytes, self.restored_frames,
-                        len(self.store.frames)-self.restored_frames)
+                        len(self.store.frames)-self.restored_frames,
+                        elapsed, new_bytes/elapsed if elapsed > 0 else 0.0,
+                        coverage, last.offset//self.block_size if last.payload else None)

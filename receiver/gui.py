@@ -36,6 +36,9 @@ class App:
         self.fresh = tk.BooleanVar(value=args.fresh)
         self.preview_status = tk.StringVar(value='プレビュー未開始')
         self.reception_origin = tk.StringVar(value='保存済みから再開した分と今回の新規受信を分けて表示します。')
+        self.receive_speed = tk.StringVar(value='今回の平均速度 0.00 kB/s / 経過 0.0秒（新規データのみ）')
+        self.map_progress = None
+        self.map_caption = tk.StringVar(value='全体の受信位置 — 左が先頭、右が末尾')
         root.title('PS2 Video Backup — キャプチャ受信')
         root.geometry('1000x780')
         root.minsize(820, 650)
@@ -73,10 +76,16 @@ class App:
         ttk.Label(outer, textvariable=self.counts, font=('Yu Gothic UI', 12)).pack(anchor='w', pady=(10, 6))
         self.bar = ttk.Progressbar(outer, maximum=100, mode='determinate')
         self.bar.pack(fill='x')
+        ttk.Label(outer, textvariable=self.map_caption).pack(anchor='w', pady=(6, 2))
+        self.receive_map = tk.Canvas(outer, height=24, bg='#353535', highlightthickness=0)
+        self.receive_map.pack(fill='x')
+        self.receive_map.bind('<Configure>', lambda event: self.draw_map())
+        ttk.Label(outer, text='緑: 受信済み　黄: 一部受信　灰: 未受信　白枠: 直近に受信した位置').pack(anchor='w')
         byte_panel = ttk.LabelFrame(outer, text='受信バイト', padding=8)
         byte_panel.pack(fill='x', pady=(8, 0))
         ttk.Label(byte_panel, textvariable=self.byte_counts).pack(anchor='w')
         ttk.Label(byte_panel, textvariable=self.reception_origin).pack(anchor='w')
+        ttk.Label(byte_panel, textvariable=self.receive_speed).pack(anchor='w')
         ttk.Label(byte_panel, textvariable=self.byte_range, wraplength=920).pack(anchor='w', pady=(3, 4))
         ttk.Label(byte_panel, textvariable=self.hex_preview, font=('Consolas', 10)).pack(anchor='w')
         ttk.Label(outer, textvariable=self.details, wraplength=940).pack(anchor='w', pady=(6, 8))
@@ -143,6 +152,10 @@ class App:
         self.counts.set('受信 0 / —　　欠落 —　　CRCエラー 0')
         self.byte_counts.set('受信済み 0 bytes')
         self.reception_origin.set('保存済みから再開 0 bytes / 今回の新規受信 0 bytes')
+        self.receive_speed.set('今回の平均速度 0.00 kB/s / 経過 0.0秒（新規データのみ）')
+        self.map_progress = None
+        self.receive_map.delete('all')
+        self.map_caption.set('全体の受信位置 — 左が先頭、右が末尾')
         self.details.set(f'今回の保存先: {directory}')
         self.byte_range.set('直近の受信範囲 —　　先頭の欠落位置 —')
         self.hex_preview.set('CRC合格フレームの先頭32 bytesをここに表示します。')
@@ -210,7 +223,32 @@ class App:
         self.stop_button['state'] = 'disabled'
         self.status.set('停止しています…')
 
+    def draw_map(self):
+        self.receive_map.delete('all')
+        progress = self.map_progress
+        if progress is None or not progress.coverage:
+            return
+        width = max(1, self.receive_map.winfo_width())
+        count = len(progress.coverage)
+        colors = ('#555555', '#c99b24', '#238b45')
+        for index, state in enumerate(progress.coverage):
+            x0, x1 = index*width/count, (index+1)*width/count
+            self.receive_map.create_rectangle(x0, 0, x1, 24, fill=colors[state], outline='')
+        if progress.current_block is not None:
+            index = progress.current_block
+            self.receive_map.create_rectangle(index*width/count+1, 1,
+                                             (index+1)*width/count-1, 23,
+                                             outline='#ffffff', width=2)
+
     def show_bytes(self, progress):
+        self.map_progress = progress
+        if progress.source_size:
+            position = 100*progress.last_offset/progress.source_size if progress.last_offset is not None else 0
+            self.map_caption.set(f'全体の受信位置 0x00000000 → 0x{progress.source_size-1:08X}'
+                                 f' / 直近 {position:.1f}%の位置（順番は前後することがあります）')
+        self.draw_map()
+        self.receive_speed.set(f'今回の平均速度 {progress.new_bytes_per_second/1000:.2f} kB/s'
+                               f' / 経過 {progress.elapsed_seconds:.1f}秒（新規データのみ）')
         percent = progress.received_bytes*100/progress.source_size if progress.source_size else 0
         self.byte_counts.set(f'受信済み {progress.received_bytes:,} / {progress.source_size:,} bytes'
                              f'（{percent:.1f}%）　未受信 {progress.source_size-progress.received_bytes:,} bytes')
