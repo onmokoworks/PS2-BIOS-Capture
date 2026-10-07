@@ -59,10 +59,8 @@ class App:
         self.device.pack(side='left', fill='x', expand=True)
         self.refresh_button = ttk.Button(top, text='再検索', command=self.refresh)
         self.refresh_button.pack(side='left', padx=8)
-        self.start_button = ttk.Button(top, text='受信開始', command=self.start)
+        self.start_button = ttk.Button(top, text='受信開始', command=self.toggle_receive)
         self.start_button.pack(side='left')
-        self.stop_button = ttk.Button(top, text='停止', state='disabled', command=self.stop_receive)
-        self.stop_button.pack(side='left', padx=(8, 0))
         self.fresh_toggle = ttk.Checkbutton(outer, text='ゼロから受信する（毎回別フォルダーに保存・以前のデータは残す）',
                                             variable=self.fresh)
         self.fresh_toggle.pack(anchor='w', pady=(8, 0))
@@ -160,10 +158,10 @@ class App:
         self.byte_range.set('直近の受信範囲 —　　先頭の欠落位置 —')
         self.hex_preview.set('CRC合格フレームの先頭32 bytesをここに表示します。')
         self.status.set('キャプチャ機器を開いています…')
-        for control in (self.start_button, self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
+        for control in (self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
             control['state'] = 'disabled'
         self.device['state'] = 'disabled'
-        self.stop_button['state'] = 'normal'
+        self.start_button.configure(text='受信停止', state='normal')
         self.worker = threading.Thread(target=self.receive, args=(source, directory), daemon=True)
         self.worker.start()
 
@@ -174,6 +172,7 @@ class App:
                       video_frames(self.args.video if self.args.video else source,
                                    'auto' if self.args.video else 'dshow'))
             transfer = Transfer(directory)
+            completion_notified = False
             errors = Counter()
             last_decode = last_status = 0.0
             for image in stream:
@@ -196,17 +195,21 @@ class App:
                     # Session/storage errors are actionable, not bad video frames.
                     if transfer.store is not None and transfer.store.identity != frame.identity:
                         transfer = Transfer(directory)
+                        completion_notified = False
                         self.events.put(('status', '密度または送信sessionが変わりました。別の受信セットを開始します。'))
                     progress = transfer.accept(frame)
                     if progress.complete:
-                        self.events.put(('complete', progress))
-                        break
+                        if not completion_notified:
+                            self.events.put(('complete', progress))
+                            completion_notified = True
                 if now - last_status > .25:
-                    self.events.put(('progress', (transfer.progress(), dict(errors))))
+                    if not completion_notified:
+                        self.events.put(('progress', (transfer.progress(), dict(errors))))
                     last_status = now
             else:
                 if self.args.video or self.args.images:
-                    self.events.put(('status', '入力終了。未受信フレームは保存先のcheckpointから再開できます。'))
+                    if not completion_notified:
+                        self.events.put(('status', '入力終了。未受信フレームは保存先のcheckpointから再開できます。'))
                 else:
                     raise OSError('キャプチャから映像を取得できません。OBS側の同じキャプチャソースを無効にして再試行してください。')
             if self.stop.is_set():
@@ -218,9 +221,15 @@ class App:
                 stream.close()
             self.events.put(('done', None))
 
+    def toggle_receive(self):
+        if self.worker is not None and self.worker.is_alive():
+            self.stop_receive()
+        else:
+            self.start()
+
     def stop_receive(self):
         self.stop.set()
-        self.stop_button['state'] = 'disabled'
+        self.start_button.configure(text='停止中…', state='disabled')
         self.status.set('停止しています…')
 
     def draw_map(self):
@@ -301,7 +310,8 @@ class App:
                 origin = ('保存済みデータだけで完成を確認しました。' if value.new_frames == 0
                           else '保存済みデータと今回の受信で完成しました。' if value.restored_frames
                           else '今回の受信だけで完成しました。')
-                self.status.set(origin + ' 全体CRC一致。' + suffix)
+                continuing = '' if self.args.video or self.args.images else ' 映像の取得は続けます。'
+                self.status.set(origin + ' 全体CRC一致。' + suffix + continuing)
                 self.details.set(value.output)
                 if self.args.report:
                     import json
@@ -315,10 +325,10 @@ class App:
             elif kind == 'done':
                 self.capture_active = False
                 self.preview_status.set('プレビュー停止 — 表示中の画像は最後に取得した映像です')
-                for control in (self.start_button, self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
+                for control in (self.refresh_button, self.browse_button, self.destination, self.fresh_toggle):
                     control['state'] = 'normal'
                 self.device['state'] = 'readonly'
-                self.stop_button['state'] = 'disabled'
+                self.start_button.configure(text='受信開始', state='normal')
         if self.preview is not None:
             image, self.preview = self.preview, None
             picture = Image.fromarray(image)
