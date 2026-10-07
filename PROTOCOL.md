@@ -38,3 +38,19 @@ receiverは4 finderのnested contoursから位置を求め、homographyで基準
 初回CRC合格frameで (version,type,mode,flags,session,count,size,encoded,source CRC) を固定。相違は混在させず拒否。indexごとにpacketを保存、再起動時にも全packetを再検証。同じindex/同じ内容は重複、同じindex/異内容は拒否。全indexが揃いサイズ・source CRC一致後のみ完成binaryを生成。CRCは伝送エラー検出であり、認証・暗号ではない。
 
 PS2は最終frameの次にindex0へ戻り無期限送信。既定6 VBlank/frame。4 MiBで31,776 frames、理想約53分/周（59.94Hz、計算描画等の追加時間を除く）。このMVPは帯域よりセル安定性を優先。COLOR8/圧縮/FECのflagsは予約せず、将来version更新で設計する。
+
+## Version 2: runtime density profiles
+
+ヘッダー構造とCRC方式はv1と同じ。byte4=2、byte7はflagsではなくgrid profile IDを表す。COLOR4 RAWのみで、encoded size=source size。v1は引き続きbyte7=0・180 bytes固定で受信可能。
+
+|profile|columns×rows|cell pixels|packet bytes|payload capacity|
+|---:|---:|---:|---:|---:|
+|0|36×20|8×8|180|132|
+|1|48×26|6×6|312|264|
+|2|72×40|4×4|720|672|
+
+全profileのdata左上は(16,32)、finder/calibrationはv1と同じ。profile1は下端y=188、他は192。余った領域は黒。count=max(1,ceil(size/capacity))、offset=index*capacity、len=min(capacity,size-offset)。CRC後のゼロpaddingを含めpacket bytes固定。
+
+receiverは3種類のサンプリングを試し、復号したヘッダーのprofileと採用したgridが一致し、frame CRCが通った場合のみ採用する。未知profile/サイズ関係の不整合は拒否。速度だけの変更は同sessionを維持する。密度変更は新session・index0から開始し、受信途中の異profileデータは混ぜない。デスクトップreceiverは設定変更を検出し、別checkpointセットへ切り替える。
+
+自動送信は標準profileで0.1/0.2/0.3秒の周回を繰り返す固定schedule。受信品質に応じた自動最適化ではない。コントローラー操作は[INTERACTIVE](docs/INTERACTIVE.md)参照。

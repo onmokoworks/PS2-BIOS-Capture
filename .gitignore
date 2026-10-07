@@ -20,3 +20,4 @@ checkpoints/
 build/
 ps2/ps2v_sysman_irx.c
 *.ppm
+*.iso

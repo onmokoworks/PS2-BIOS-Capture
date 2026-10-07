@@ -125,6 +125,20 @@ def test_video_adapter(tmp_path):
     assert store.result() == data
 
 
+@pytest.mark.parametrize('field', [None, 0, 1])
+def test_480i_doubled_cells(field):
+    # 640x448 frames with each logical scanline duplicated give both fields
+    # identical symbols. Captures may deliver a woven frame or either field.
+    data = random.Random(480).randbytes(4096)
+    store = Store()
+    for packet in encode(data):
+        image = cv2.resize(render(packet), (640, 448), interpolation=cv2.INTER_NEAREST)
+        if field is not None:
+            image = image[field::2].copy()
+        store.add(decode_image(image))
+    assert store.result() == data
+
+
 @pytest.mark.slow
 def test_full_4mib():
     data = random.Random(0x50533256).randbytes(4*1024*1024)

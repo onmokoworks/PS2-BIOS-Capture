@@ -41,3 +41,16 @@ def test_fixed_pattern(executable, tmp_path):
     output = tmp_path / 'fixed.bin'
     subprocess.run([str(executable), '--pattern', str(output)], check=True)
     assert output.read_bytes() == pattern()
+
+
+@pytest.mark.parametrize('profile', [0, 1, 2])
+def test_c_profiles(executable, tmp_path, profile):
+    data = random.Random(78).randbytes(4097)
+    source, packet, ppm = [tmp_path/n for n in ('input.bin','packet.pkt','frame.ppm')]
+    source.write_bytes(data)
+    subprocess.run([str(executable),str(source),'1',str(packet),str(ppm),str(profile)],check=True)
+    expected = list(encode(data,0x12345678,profile=profile,version=2))[1]
+    assert packet.read_bytes() == expected
+    actual = cv2.cvtColor(cv2.imread(str(ppm)),cv2.COLOR_BGR2RGB)
+    assert np.array_equal(actual,render(expected))
+    assert decode_image(actual).pack() == expected

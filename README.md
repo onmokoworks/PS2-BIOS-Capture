@@ -40,6 +40,21 @@ python -c "from pathlib import Path; assert Path('test-data.bin').read_bytes()==
 `tools.test_pattern`はPS2既定モードと同じxorshift32（seed=0x50533256、各更新後の下位8bit）の64 KiBを生成。任意binaryをreference encoderのinputに指定することもできます。
 
 ## 録画・UVC
+
+専用のネイティブ画面でも直接キャプチャできます。
+
+```sh
+python -m pip install -r requirements-gui.txt
+python -m receiver.gui
+```
+
+Windowsでは`Launch-Capture.cmd`をダブルクリックしても起動できます。
+機器一覧からキャプボを選んで「受信開始」を押すと、プレビュー・受信数・欠落数・CRCエラーを表示します。正常なpacketを随時checkpointへ保存し、全体CRCが一致すると完成binaryを保存してキャプチャを停止します。現在の固定64 KiBテストパターンでは、既知データとの全byte一致も確認します。
+
+同じ保存先を使えば同一sessionを再開できます。既存の完成ファイルは同じ内容なら再利用し、異なる内容なら上書きしません。保存先の既定値は`captures/`です。OBSなどが同じ機器を使用中の場合は、そちらのキャプチャを停止してから受信してください。
+
+「受信バイト」欄は、CRC合格済みのユニークなペイロードのバイト数・未受信バイト数・直近に受信したオブジェクト内範囲・先頭の欠落位置・直近フレーム先頭32 bytesの16進表示を示します。同じフレームの再受信はバイト数に加算しません。範囲はROM内などの相対オフセットで、PS2の物理メモリアドレスではありません。checkpointから再開した場合も保存済みのバイト数を引き継ぎます。
+
 ```sh
 python -m receiver --video capture.avi --state checkpoints/session-a --output recovered.bin
 python -m receiver --camera 0 --backend dshow --state checkpoints/session-b --output recovered.bin
@@ -58,13 +73,20 @@ stateは1 session専用。別のobject/起動sessionには新しいstateディ�
 make -C ps2 SOURCE_KIND=0  # Phase 2: 固定64 KiB (既定)
 make -C ps2 SOURCE_KIND=1  # Phase 3: ROM0先頭64 KiB
 make -C ps2 SOURCE_KIND=2  # Phase 4: ROM0全4 MiB
+make -C ps2 SOURCE_KIND=0 VIDEO_INTERLACED=1 HOLD_VBLANKS=12  # HDMI変換器向け480i互換版
 ```
 
 出力は`ps2/ps2-video-backup.elf`。モード変更時はmain.oを必ず再コンパイルします。別名で保存したい場合は`EE_BIN=ps2v-test.elf`などを指定できます。`HOLD_VBLANKS=6`が既定、最小2。MVPでは6以上から開始してください。IOP IRXはELFへ埋め込まれるので別ファイルのロードやUSBストレージは不要です。
 
+通常のPS2メニューは映るのにテスト版で「Video Format Not Supported」が出る場合、HDMI変換器などが240pを受け付けない可能性があります。`VIDEO_INTERLACED=1`でNTSCの480iタイミングに変更し、論理320×224の画面を640×448へ2倍描画します。各走査線を2本ずつ同じ内容にするため、両フィールドに全セルが残ります。PS2Vの形式は同じです。変換器・キャプボでの実際の受付は別途確認してください。
+
+DVDプレーヤー3.02J用のYADE起動ディスクは[独立したパッケージング手順](packaging/yade/README.md)を参照してください。
+
 この成果物の`ps2/build/`には3モードのビルド済みELFとSHA256 manifestがあります。これらは未実機検証版です。まずtest ELFで撮影し、`tools.test_pattern`の出力と完全一致してからROM0の試験に進みます。ソースZIPには生成ELF・SDK・個人データを含めません。
 
 PS2からUSBストレージ/ネットワークへ書き出す処理はありません。ELFを起動する環境自体（メモリーカード等）は別途必要です。FreeDVDBoot packagingは最後の独立工程として保留しています。
+
+YADE用の[操作メニュー版](docs/INTERACTIVE.md)も追加しました。`INTERACTIVE=1 VIDEO_INTERLACED=1`でビルドし、PS2のコントローラーから表示時間と密度を変更できます。AUTOは0.1/0.2/0.3秒で周回、MANUALは0.1秒刻みと3種類の密度です。同じメニューから固定データ・ROM0先頭64 KiB・ROM0全4 MiBを選べます。初期選択は固定データで、STARTを押すまで読み出しません。メニュー版の実機検証はこれからです。
 
 ## 限界
 COLOR8、圧縮、FEC、フィールド分離/高度なdeinterlace、極端なperspective、四隅を失ったcropには対応していません。各セルは8×8 pixels。毎フレーム校正しますが、compositeでの実測信頼性はまだ未確認です。RGBが潰れたり、切替途中の画面を取り込んだときはframe CRCで拒否し、次の保持画面/周回を待ちます。

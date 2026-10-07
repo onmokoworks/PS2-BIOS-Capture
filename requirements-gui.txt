@@ -1,0 +1,3 @@
+-r requirements.txt
+Pillow>=10,<13
+pygrabber==0.2; sys_platform == 'win32'

@@ -2,7 +2,7 @@
 import itertools
 import cv2
 import numpy as np
-from .protocol import PACKET_SIZE, DecodeError, decode
+from .protocol import GRIDS, packet_size, DecodeError, decode
 
 PALETTE = np.array([[32, 32, 32], [224, 224, 224],
                     [224, 192, 32], [32, 64, 224]], dtype=np.uint8)
@@ -10,8 +10,10 @@ FINDERS = np.array([[24, 20], [296, 20], [24, 204], [296, 204]], np.float32)
 
 
 def render(packet):
-    if len(packet) != PACKET_SIZE:
+    profile = packet[7] if len(packet) >= 48 else -1
+    if profile not in GRIDS or len(packet) != packet_size(profile):
         raise ValueError('packet size')
+    cols, rows, cell = GRIDS[profile]
     image = np.zeros((224, 320, 3), np.uint8)
     for cx, cy in FINDERS.astype(int):
         image[cy-8:cy+8, cx-8:cx+8] = 255
@@ -20,8 +22,8 @@ def render(packet):
     for k, color in enumerate(PALETTE):
         image[12:28, 64+48*k:96+48*k] = color
     raw = np.frombuffer(packet, np.uint8)
-    symbols = ((raw[:, None] >> np.array([6, 4, 2, 0])) & 3).reshape(20, 36)
-    image[32:192, 16:304] = PALETTE[symbols].repeat(8, axis=0).repeat(8, axis=1)
+    symbols = ((raw[:, None] >> np.array([6, 4, 2, 0])) & 3).reshape(rows, cols)
+    image[32:32+rows*cell, 16:16+cols*cell] = PALETTE[symbols].repeat(cell, axis=0).repeat(cell, axis=1)
     return image
 
 
@@ -50,7 +52,7 @@ def locate(image):
     return points
 
 
-def sample(image, points):
+def sample(image, points, profile=0):
     points = sorted(points, key=lambda p: p[1])
     ordered = sorted(points[:2]) + sorted(points[2:])
     target = FINDERS - .5  # pixel center convention for even-sized markers
@@ -62,8 +64,10 @@ def sample(image, points):
     if np.min(distances + np.eye(4)*1000) < 30:
         raise DecodeError('palette collapsed')
     # Average the central 3x3 pixels; avoid analog cell edges.
-    cells = normalized[32:192, 16:304].reshape(20, 8, 36, 8, 3)
-    colors = cells[:, 3:6, :, 3:6].mean(axis=(1, 3))
+    cols, rows, cell = GRIDS[profile]
+    cells = normalized[32:32+rows*cell, 16:16+cols*cell].reshape(rows, cell, cols, cell, 3)
+    lo, hi = (1, 3) if cell == 4 else (cell//2-1, cell//2+2)
+    colors = cells[:, lo:hi, :, lo:hi].mean(axis=(1, 3))
     symbols = ((colors[:, :, None, :] - palette)**2).sum(axis=3).argmin(axis=2)
     groups = symbols.reshape(-1, 4)
     return ((groups[:, 0] << 6) | (groups[:, 1] << 4) |
@@ -75,8 +79,12 @@ def decode_image(image):
         raise DecodeError('expected RGB uint8 image')
     last = 'finders'
     for points in itertools.combinations(locate(image), 4):
-        try:
-            return decode(sample(image, points))
-        except DecodeError as error:
-            last = str(error)
+        for profile in GRIDS:
+            try:
+                frame = decode(sample(image, points, profile))
+                if frame.profile == profile:
+                    return frame
+            except DecodeError as error:
+                if last != 'frame CRC':
+                    last = str(error)
     raise DecodeError(last)

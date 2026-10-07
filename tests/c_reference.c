@@ -17,7 +17,8 @@ static void rectangle(void *ctx, int x, int y, int w, int h, const uint8_t rgb[3
 int main(int argc, char **argv)
 {
     uint32_t crc, index;
-    uint8_t packet[PV_PACKET];
+    uint8_t packet[PV_MAX_PACKET];
+    unsigned profile = 0, version = 1;
     unsigned char *data;
     pv_object object;
     FILE *in, *out;
@@ -29,7 +30,8 @@ int main(int argc, char **argv)
         if (fwrite(data, 1, 65536, out) != 65536) return 9;
         fclose(out); free(data); return 0;
     }
-    if (argc != 5) return 2;
+    if (argc != 5 && argc != 6) return 2;
+    if (argc == 6) { profile = (unsigned)strtoul(argv[5],0,10); version = 2; }
     in = fopen(argv[1], "rb"); if (!in) return 3;
     fseek(in,0,SEEK_END); size=ftell(in); rewind(in);
     if (size < 0 || size > 16*1024*1024) return 4;
@@ -38,11 +40,11 @@ int main(int argc, char **argv)
     fclose(in);
     object.type=0; object.size=(uint32_t)size; object.context=data; object.read=read_mem;
     index=(uint32_t)strtoul(argv[2],0,10);
-    if (pv_object_crc(&object,&crc) || pv_packet(&object,0x12345678u,crc,index,packet)) return 7;
+    if (pv_object_crc(&object,&crc) || pv_packet_profile(&object,0x12345678u,crc,index,profile,version,packet)) return 7;
     out=fopen(argv[3],"wb"); if (!out) return 8;
-    if (fwrite(packet,1,sizeof(packet),out)!=sizeof(packet)) return 9;
+    if (fwrite(packet,1,pv_packet_size(profile),out)!=pv_packet_size(profile)) return 9;
     fclose(out);
-    pv_render(packet,rectangle,0);
+    pv_render_profile(packet,profile,rectangle,0);
     out=fopen(argv[4],"wb"); if (!out) return 10;
     fprintf(out,"P6\n320 224\n255\n");
     if (fwrite(pixels,1,sizeof(pixels),out)!=sizeof(pixels)) return 11;

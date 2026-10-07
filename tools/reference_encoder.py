@@ -11,10 +11,12 @@ def main():
     parser.add_argument('input', type=Path)
     parser.add_argument('directory', type=Path)
     parser.add_argument('--session', type=lambda v: int(v, 0), default=None)
+    parser.add_argument('--profile', type=int, choices=[0, 1, 2], default=0)
+    parser.add_argument('--version', type=int, choices=[1, 2], default=1)
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=False)
     session = secrets.randbits(32) if args.session is None else args.session
-    for i, packet in enumerate(encode(args.input.read_bytes(), session)):
+    for i, packet in enumerate(encode(args.input.read_bytes(), session, profile=args.profile, version=args.version)):
         image = cv2.cvtColor(render(packet), cv2.COLOR_RGB2BGR)
         if not cv2.imwrite(str(args.directory / f'{i:08d}.png'), image):
             raise OSError('PNG write failed')

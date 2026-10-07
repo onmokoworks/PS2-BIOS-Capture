@@ -22,6 +22,7 @@ static int response[16] __attribute__((aligned(64)));
 int pv_sysman_init(void)
 {
     int result, module, tries;
+    if (client.server) return 0;
     SifInitRpc(0);
     if (sbv_patch_enable_lmb() < 0) return -1;
     module = SifExecModuleBuffer(ps2v_sysman_irx, size_ps2v_sysman_irx, 0, 0, &result);
